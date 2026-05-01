@@ -5,17 +5,26 @@ const cors = require('cors');
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Enable CORS for your GitHub Pages site
 app.use(cors());
 app.use(express.json());
 
-// Supabase connection
+console.log('Starting server... DATABASE_URL exists:', !!process.env.DATABASE_URL);
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
-// GET all permits with filters
+// Test DB connection on startup
+pool.connect((err, client, release) => {
+  if (err) {
+    console.error('DB CONNECTION ERROR:', err.message);
+  } else {
+    console.log('DB Connected successfully');
+    release();
+  }
+});
+
 app.get('/v1/permits', async (req, res) => {
   const { city, status } = req.query;
   let query = 'SELECT id, city, permit_type, status, issued_date FROM permits WHERE 1=1';
@@ -34,11 +43,11 @@ app.get('/v1/permits', async (req, res) => {
     const result = await pool.query(query, params);
     res.json({ count: result.rows.length, data: result.rows });
   } catch (err) {
+    console.error('GET ERROR:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST new permit
 app.post('/v1/permits', async (req, res) => {
   const { city, permit_type, status, issued_date } = req.body;
 
@@ -53,6 +62,7 @@ app.post('/v1/permits', async (req, res) => {
     );
     res.json({ id: result.rows[0].id, message: 'Permit created' });
   } catch (err) {
+    console.error('POST ERROR:', err.message);
     res.status(400).json({ error: err.message });
   }
 });

@@ -7,30 +7,36 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Use the exact env var names you set in Render
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
+  process.env.SUPABASE_ANON_KEY
 );
 
-// Health check
+// Health check endpoint for Render
 app.get('/health', (req, res) => {
-  res.json({ status: "ok", service: "Gridv21 API v1" });
+  res.json({ status: "ok", service: "Gridv21 API" });
 });
 
 // Get permits
 app.get('/v1/permits', async (req, res) => {
-  const { city, limit = 50 } = req.query;
-  
-  let query = supabase.from('permits').select('*').limit(limit);
-  if (city) query = query.ilike('city', city);
-  
-  const { data, error } = await query;
-  if (error) return res.status(500).json({ error: error.message });
-  
-  res.json({ count: data.length, data });
+  try {
+    const { city, limit = 50 } = req.query;
+    
+    let query = supabase.from('permits').select('*').limit(limit);
+    if (city) query = query.ilike('city', city);
+    
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    
+    res.json({ count: data.length, data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-const PORT = process.env.PORT || 3000
+// Critical: Use Render's port + bind to 0.0.0.0
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on port ${PORT}`)
-})
+  console.log(`Server running on port ${PORT}`);
+});

@@ -8,7 +8,7 @@ app.use(cors());
 app.use(express.json());
 
 const supabase = createClient(
-  process.env.SUPABASE_URL,https://iatjgyrphrxeqaiqbpfb.supabase.co/rest/v1/
+  process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 

@@ -9,7 +9,7 @@ app.use(express.json());
 
 const supabase = createClient(
   process.env.SUPABASE_URL,https://iatjgyrphrxeqaiqbpfb.supabase.co/rest/v1/
-  process.env.SUPABASE_SERVICE_KEYsb_secret_1Gs3U-pfRurP-UATaMBLkQ_LxHmIyyt
+  process.env.SUPABASE_SERVICE_KEY
 );
 
 // Health check

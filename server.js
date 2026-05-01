@@ -21,10 +21,12 @@ app.get('/health', (req, res) => {
 // Get permits
 app.get('/v1/permits', async (req, res) => {
   try {
-    const { city, limit = 50 } = req.query;
+    const { city, status, permit_type, limit = 50 } = req.query;
     
     let query = supabase.from('permits').select('*').limit(limit);
     if (city) query = query.ilike('city', city);
+    if (status) query = query.eq('status', status);
+    if (permit_type) query = query.ilike('permit_type', permit_type);
     
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });

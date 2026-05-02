@@ -70,3 +70,5 @@ app.post('/v1/permits', async (req, res) => {
 app.listen(port, () => {
   console.log(`API running on port ${port}`);
 });
+import cors from 'cors';
+app.use(cors()); // before your routes

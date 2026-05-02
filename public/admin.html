@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gridv21 Brain Dashboard</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 20px; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+    h1 { margin: 0; font-size: 24px; color: #38bdf8; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 30px; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 16px; }
+    .card h3 { margin: 0 0 8px 0; font-size: 14px; color: #94a3b8; font-weight: 500; }
+    .card .val { font-size: 28px; font-weight: 700; color: #f1f5f9; }
+    .card .sub { font-size: 12px; color: #64748b; margin-top: 4px; }
+    table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 8px; overflow: hidden; }
+    th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #334155; }
+    th { background: #0f172a; font-size: 12px; color: #94a3b8; font-weight: 600; text-transform: uppercase; }
+    td { font-size: 14px; }
+    .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+    .badge.auto { background: #166534; color: #bbf7d0; }
+    .badge.contractor { background: #7c2d12; color: #fed7aa; }
+    .badge.ai { background: #1e3a8a; color: #bfdbfe; }
+    button { background: #0ea5e9; color: white; border: none; padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; margin-right: 6px; }
+    button:hover { background: #0284c7; }
+    button.danger { background: #dc2626; }
+    button.danger:hover { background: #b91c1c; }
+    button.ghost { background: #334155; }
+    .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); align-items: center; justify-content: center; }
+    .modal.show { display: flex; }
+    .modal-box { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 24px; width: 90%; max-width: 500px; }
+    .modal-box h2 { margin: 0 0 16px 0; }
+    input, textarea { width: 100%; background: #0f172a; border: 1px solid #334155; color: #e2e8f0; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 14px; box-sizing: border-box; }
+    label { display: block; font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
+    .row { display: flex; gap: 12px; }
+    .loading { text-align: center; padding: 40px; color: #64748b; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <h1>Gridv21 Brain Dashboard</h1>
+      <button onclick="loadData()">Refresh</button>
+    </div>
+
+    <div class="stats">
+      <div class="card">
+        <h3>Total Leads</h3>
+        <div class="val" id="totalLeads">-</div>
+        <div class="sub" id="leadSplit">-</div>
+      </div>
+      <div class="card">
+        <h3>Est. Revenue</h3>
+        <div class="val" id="revenue">$-</div>
+        <div class="sub">$150 contractor / $5 AI</div>
+      </div>
+      <div class="card">
+        <h3>Live Posts</h3>
+        <div class="val" id="postCount">-</div>
+        <div class="sub">Auto-published</div>
+      </div>
+      <div class="card">
+        <h3>Top Tool</h3>
+        <div class="val" id="topTool" style="font-size:18px;">-</div>
+        <div class="sub" id="topToolScore">-</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-bottom:16px;">Live Auto-Published Posts</h3>
+      <div id="tableWrap"><div class="loading">Loading...</div></div>
+    </div>
+  </div>
+
+  <div class="modal" id="editModal">
+    <div class="modal-box">
+      <h2>Edit Post</h2>
+      <input type="hidden" id="editId">
+      <label>Title</label>
+      <input id="editTitle">
+      <label>Meta Description</label>
+      <textarea id="editMeta" rows="3"></textarea>
+      <div class="row" style="margin-top:16px;">
+        <button onclick="saveEdit()">Save Changes</button>
+        <button class="ghost" onclick="closeModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+const API_BASE = window.location.origin;
+const KEY = new URLSearchParams(window.location.search).get('key');
+
+async function api(path, opts = {}) {
+  const res = await fetch(`${API_BASE}${path}?key=${KEY}`, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...opts.headers }
+  });
+  if (!res.ok) throw new Error('API error');
+  return res.json();
+}
+
+async function loadData() {
+  try {
+    document.getElementById('tableWrap').innerHTML = '<div class="loading">Loading...</div>';
+    
+    const [dash, leads] = await Promise.all([
+      api('/admin/dashboard'),
+      api('/api/leads/count')
+    ]);
+
+    // Stats
+    document.getElementById('totalLeads').textContent = leads.total_leads || 0;
+    document.getElementById('leadSplit').textContent = `${leads.contractor_leads || 0} contractor, ${leads.ai_leads || 0} AI`;
+    document.getElementById('revenue').textContent = '$' + (leads.estimated_revenue || 0).toLocaleString();
+    document.getElementById('postCount').textContent = dash.live_posts?.length || 0;
+
+    if (dash.live_posts?.length) {
+      const top = dash.live_posts.reduce((max, p) => {
+        const score = (p.tools?.clicks || 0) + (p.tools?.conversions || 0) * 3;
+        return score > max.score ? { name: p.tools?.name, score } : max;
+      }, { name: '-', score: 0 });
+      document.getElementById('topTool').textContent = top.name;
+      document.getElementById('topToolScore').textContent = `Score: ${top.score}`;
+    }
+
+    // Table
+    if (!dash.live_posts?.length) {
+      document.getElementById('tableWrap').innerHTML = '<div class="loading">No posts yet. Run the brain cron.</div>';
+      return;
+    }
+
+    const rows = dash.live_posts.map(p => `
+      <tr>
+        <td>
+          <div style="font-weight:600;">${p.title}</div>
+          <div style="font-size:12px;color:#64748b;margin-top:4px;">${p.slug}</div>
+        </td>
+        <td>${p.tools?.name || '-'}</td>
+        <td><span class="badge ${p.tools?.type}">${p.tools?.type || '-'}</span></td>
+        <td>${(p.tools?.clicks || 0) + (p.tools?.conversions || 0) * 3}</td>
+        <td>${new Date(p.published_at).toLocaleDateString()}</td>
+        <td>
+          <button onclick="openEdit(${p.id}, '${p.title.replace(/'/g, "\\'")}', '${p.meta_description?.replace(/'/g, "\\'") || ''}')">Edit</button>
+          <button class="danger" onclick="unpublish(${p.id})">Unpublish</button>
+        </td>
+      </tr>
+    `).join('');
+
+    document.getElementById('tableWrap').innerHTML = `
+      <table>
+        <thead><tr><th>Post</th><th>Tool</th><th>Type</th><th>Score</th><th>Published</th><th>Actions</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+  } catch (e) {
+    document.getElementById('tableWrap').innerHTML = '<div class="loading">Error loading. Check ADMIN_KEY in URL.</div>';
+  }
+}
+
+function openEdit(id, title, meta) {
+  document.getElementById('editId').value = id;
+  document.getElementById('editTitle').value = title;
+  document.getElementById('editMeta').value = meta;
+  document.getElementById('editModal').classList.add('show');
+}
+
+function closeModal() {
+  document.getElementById('editModal').classList.remove('show');
+}
+
+async function saveEdit() {
+  const id = document.getElementById('editId').value;
+  await api(`/admin/edit/${id}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      title: document.getElementById('editTitle').value,
+      meta: document.getElementById('editMeta').value
+    })
+  });
+  closeModal();
+  loadData();
+}
+
+async function unpublish(id) {
+  if (!confirm('Unpublish this post?')) return;
+  await api(`/admin/unpublish/${id}`, { method: 'POST' });
+  loadData();
+}
+
+loadData();
+</script>
+</body>
+  </html>

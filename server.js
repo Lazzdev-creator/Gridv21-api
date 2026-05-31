@@ -1,306 +1,212 @@
-import express from 'express'
-import cors from 'cors'
-import { supabaseAdmin } from './lib/supabaseAdmin.js'
+import express from 'express';
+import { createClient } from '@supabase/supabase-js';
+import dotenv from 'dotenv';
+dotenv.config();
 
-const app = express()
-const PORT = process.env.PORT || 3000
+const app = express();
+app.use(express.json());
+app.use(express.static('public'));
 
-app.set('trust proxy', true)
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-app.use(cors({ origin: process.env.FRONTEND_URL || '*' }))
-app.use(express.json())
-app.use(express.static('public'))
+const THRESHOLDS = { render: 300, supabase: 500 };
+const RENDER_API_KEY = process.env.RENDER_API_KEY;
+const RENDER_SERVICE_ID = process.env.RENDER_SERVICE_ID;
 
-// Auth middleware
-const requireKey = (envVar) => (req, res, next) => {
-  const key = req.headers['x-api-key'] || req.query.key
-  if (key!== process.env[envVar]) {
-    return res.status(401).json({ error: 'Unauthorized' })
+const MICRO_CAPEX = {
+  budget: 87,
+  spent: 0,
+  target_days: 14,
+  daily_target_revenue: 300/14
+};
+
+class Brain {
+  static async getLast24hRevenue() {
+    const since = new Date(Date.now() - 24*60*60*1000).toISOString();
+    const { data } = await supabase.from('revenue_log').select('amount').gte('created_at', since);
+    return data?.reduce((sum, r) => sum + parseFloat(r.amount), 0) || 0;
   }
-  next()
+
+  static async getMonthlyProjection() {
+    const daily = await this.getLast24hRevenue();
+    return daily * 30;
+  }
+
+  static async getRevenueBySource(days = 30) {
+    const since = new Date(Date.now() - days*24*60*60*1000).toISOString();
+    const { data } = await supabase.from('revenue_log').select('amount, source, created_at').gte('created_at', since);
+    const bySource = {};
+    data?.forEach(r => {
+      bySource[r.source] = (bySource[r.source] || 0) + parseFloat(r.amount);
+    });
+    return bySource;
+  }
+
+  static async logRevenue(amount, source = 'manual') {
+    if (amount > 0) {
+      await supabase.from('revenue_log').insert({ amount, source, created_at: new Date() });
+    }
+  }
+
+  static async autoUpgrade() {
+    const monthly = await this.getMonthlyProjection();
+    const actions = [];
+    let status = 'zero_capex';
+
+    const { data: renderTier } = await supabase.from('settings').select('value').eq('key', 'render_tier').single();
+    if (monthly >= THRESHOLDS.render && renderTier?.value === 'free' && RENDER_API_KEY && RENDER_SERVICE_ID) {
+      const result = await this.upgradeRender();
+      if (result.success) {
+        await supabase.from('settings').update({ value: 'starter', updated_at: new Date() }).eq('key', 'render_tier');
+        actions.push('render_upgraded_to_starter_$7');
+        status = 'upgraded';
+      }
+    }
+
+    const { data: supaTier } = await supabase.from('settings').select('value').eq('key', 'supabase_tier').single();
+    if (monthly >= THRESHOLDS.supabase && supaTier?.value === 'free') {
+      await supabase.from('settings').update({ value: 'pro', updated_at: new Date() }).eq('key', 'supabase_tier');
+      actions.push('supabase_upgrade_to_pro_$25_needed');
+      status = 'upgraded';
+    }
+
+    return { monthly_projection: monthly, actions, status };
+  }
+
+  static async upgradeRender() {
+    if (!RENDER_API_KEY ||!RENDER_SERVICE_ID) {
+      return { error: 'Add RENDER_API_KEY + RENDER_SERVICE_ID to enable auto-upgrade' };
+    }
+    try {
+      const res = await fetch(`https://api.render.com/v1/services/${RENDER_SERVICE_ID}`, {
+        method: 'PATCH',
+        headers: { 'Authorization': `Bearer ${RENDER_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serviceDetails: { plan: 'starter' } })
+      });
+      return res.ok ? { success: true } : { error: await res.text() };
+    } catch (err) {
+      return { error: err.message };
+    }
+  }
 }
 
-const requireCronKey = requireKey('CRON_KEY')
-const requireAdminKey = requireKey('ADMIN_KEY')
+// Zero cost traffic webhooks
+app.post('/webhook/tiktok', async (req, res) => {
+  const { clicks, revenue } = req.body;
+  await Brain.logRevenue(revenue, 'tiktok_organic');
+  res.json({ logged: true, source: 'tiktok_organic', cost: '$0' });
+});
 
-// Health check
-app.get('/', (req, res) => {
-  res.json({ status: 'Gridv21 Brain Online', timestamp: new Date().toISOString() })
-})
+app.post('/webhook/pinterest', async (req, res) => {
+  const { clicks, revenue } = req.body;
+  await Brain.logRevenue(revenue, 'pinterest_organic');
+  res.json({ logged: true, source: 'pinterest_organic', cost: '$0' });
+});
 
-// ===== DASHBOARD STATS ENDPOINT =====
-app.get('/api/stats', async (req, res) => {
-  try {
-    const [{ count: total_leads }, { count: contractor_leads }, { count: ai_leads },
-           { count: total_clicks }, { data: posts }, { data: tools }] = await Promise.all([
-      supabaseAdmin.from('leads').select('*', { count: 'exact', head: true }),
-      supabaseAdmin.from('leads').select('*', { count: 'exact', head: true }).eq('type', 'contractor'),
-      supabaseAdmin.from('leads').select('*', { count: 'exact', head: true }).eq('type', 'ai'),
-      supabaseAdmin.from('clicks').select('*', { count: 'exact', head: true }),
-      supabaseAdmin.from('posts').select('*').eq('status', 'published'),
-      supabaseAdmin.from('tools').select('name, id, conversions').order('id', { ascending: false }).limit(1)
-    ])
+app.post('/webhook/seo', async (req, res) => {
+  const { clicks, revenue } = req.body;
+  await Brain.logRevenue(revenue, 'seo_organic');
+  res.json({ logged: true, source: 'seo_organic', cost: '$0' });
+});
 
-    const estimated_revenue = (contractor_leads * 150) + (ai_leads * 5)
-    const topTool = tools?.[0]?.name || '-'
+app.post('/webhook/youtube', async (req, res) => {
+  const { clicks, revenue } = req.body;
+  await Brain.logRevenue(revenue, 'youtube_organic');
+  res.json({ logged: true, source: 'youtube_organic', cost: '$0' });
+});
 
-    res.json({
-      total_leads, contractor_leads, ai_leads,
-      estimated_revenue, live_posts: posts.length,
-      total_clicks: total_clicks || 0, top_tool: topTool
-    })
-  } catch (err) {
-    console.error('Stats error:', err)
-    res.status(500).json({ error: err.message })
-  }
-})
+app.post('/api/revenue', async (req, res) => {
+  const { amount, source } = req.body;
+  await Brain.logRevenue(amount, source);
+  res.json({ success: true });
+});
 
-// Get all live posts
-app.get('/api/posts', async (req, res) => {
-  const { data, error } = await supabaseAdmin
-   .from('posts')
-   .select('*, tools(*)')
-   .eq('status', 'published')
-   .order('published_at', { ascending: false })
+app.get('/api/forecast', async (req, res) => {
+  const daily = await Brain.getLast24hRevenue();
+  const monthly = await Brain.getMonthlyProjection();
+  const upgrade = await Brain.autoUpgrade();
 
-  if (error) return res.status(500).json({ error: error.message })
-  res.json(data || [])
-})
+  const api_budget = monthly > 300? monthly * 0.05 : 0;
+  const costs = monthly >= 500? 32 : monthly >= 300? 7 : 0;
 
-// Redirect tracker using redirects table
-app.get('/go/:slug', async (req, res) => {
-  const { slug } = req.params
-  try {
-    const { data: redirect, error } = await supabaseAdmin
-     .from('redirects')
-     .select('target_url, id, description')
-     .eq('slug', slug)
-     .eq('active', true)
-     .maybeSingle()
+  res.json({
+    mode: upgrade.status,
+    daily_revenue: `$${daily.toFixed(2)}`,
+    monthly_projection: `$${monthly.toFixed(2)}`,
+    api_budget_reserve: `$${api_budget.toFixed(2)}`,
+    monthly_costs: `$${costs}`,
+    net_profit: `$${(monthly - costs - api_budget).toFixed(2)}`,
+    days_to_render: daily > 0 && monthly < 300? Math.ceil((300 - monthly) / daily) : monthly >= 300? 'UPGRADED' : '∞',
+    days_to_supabase: daily > 0 && monthly < 500? Math.ceil((500 - monthly) / daily) : monthly >= 500? 'UPGRADED' : '∞',
+    cap_ex_required: monthly < 300? '$0 - Zero CapEx Mode' : monthly < 500? '$7/mo Render' : '$32/mo Total',
+    auto_upgrade_ready: !!(RENDER_API_KEY && RENDER_SERVICE_ID)
+  });
+});
 
-    if (error) {
-      console.error('Redirect DB error:', error)
-      return res.status(500).send('Database error')
-    }
-    if (!redirect?.target_url) {
-      return res.status(404).send('Tool not found or no affiliate link')
-    }
-    res.redirect(301, redirect.target_url)
-  } catch (err) {
-    console.error('Redirect error:', err)
-    res.status(500).send('Server error')
-  }
-})
+app.get('/api/traffic-forecast', async (req, res) => {
+  const bySource = await Brain.getRevenueBySource(7);
+  const total7d = Object.values(bySource).reduce((a,b) => a+b, 0);
+  const dailyAvg = total7d / 7;
+  const monthlyProj = dailyAvg * 30;
+  const daysTo5k = monthlyProj > 0? Math.ceil(5000 / monthlyProj * 30) : '∞';
+  const daysTo20k = monthlyProj > 0? Math.ceil(20000 / monthlyProj * 30) : '∞';
 
-// Affiliate redirect with click tracking
-app.get('/api/track/:slug', async (req, res) => {
-  const { slug } = req.params
-  try {
-    const { data: tool, error } = await supabaseAdmin
-     .from('tools')
-     .select('id, amazon_asin')
-     .eq('slug', slug)
-     .single()
+  const sourceBreakdown = Object.entries(bySource).map(([src, amt]) => ({
+    source: src,
+    revenue_7d: `$${amt.toFixed(2)}`,
+    pct: total7d > 0? `${(amt/total7d*100).toFixed(1)}%` : '0%'
+  }));
 
-    if (error ||!tool?.amazon_asin) {
-      console.log(`Tool not found or no ASIN set for: ${slug}`)
-      return res.status(404).send('Tool not found or no ASIN set')
-    }
+  res.json({
+    monthly_projection: `$${monthlyProj.toFixed(2)}`,
+    days_to_5k: daysTo5k,
+    days_to_20k: daysTo20k,
+    sources: sourceBreakdown,
+    top_source: sourceBreakdown[0]?.source || 'none'
+  });
+});
 
-    await supabaseAdmin.from('clicks').insert({
-      tool_id: tool.id, slug, ip: req.ip, user_agent: req.headers['user-agent']
-    }).catch(e => console.log('Click log failed:', e.message))
+app.get('/api/fast-forward', async (req, res) => {
+  const monthly = await Brain.getMonthlyProjection();
+  const dailyAvg = await Brain.getLast24hRevenue();
+  const daysIn = dailyAvg > 0 ? Math.min(14, Math.floor((monthly / 30) * 14 / dailyAvg)) : 0;
+  const daysLeft = Math.max(0, 14 - daysIn);
+  const revenueNeeded = Math.max(0, 300 - monthly);
+  const dailyNeeded = daysLeft > 0 ? revenueNeeded / daysLeft : 0;
+  
+  res.json({
+    micro_capex_budget: `$${MICRO_CAPEX.budget}`,
+    spent_so_far: `$${MICRO_CAPEX.spent}`,
+    days_remaining: daysLeft,
+    daily_revenue_needed: `$${dailyNeeded.toFixed(2)}`,
+    current_daily: `$${dailyAvg.toFixed(2)}`,
+    status: monthly >= 300? 'THRESHOLD HIT - UPGRADED' : daysLeft === 0? 'TARGET MISSED' : 'FAST FORWARD MODE'
+  });
+});
 
-    const redirectUrl = `https://www.amazon.com/dp/${tool.amazon_asin}/?tag=gridbrain08-20&subid=tool_${tool.id}`
-    return res.redirect(302, redirectUrl)
-  } catch (err) {
-    console.error('Track error:', err)
-    res.status(500).send('Server error')
-  }
-})
+app.get('/api/break-even', async (req, res) => {
+  const monthly = await Brain.getMonthlyProjection();
+  const fixedCosts = monthly >= 500? 32 : monthly >= 300? 7 : 0;
+  const targetRevenue = 20000;
+  const epc = 0.20;
+  const cpc = 0.022;
 
-// Lead capture
-app.post('/api/lead', async (req, res) => {
-  const { name, email, phone, tool_slug, type } = req.body
-  const { data: tool } = await supabaseAdmin
-   .from('tools')
-   .select('id')
-   .eq('slug', tool_slug)
-   .maybeSingle()
+  const clicksNeeded = targetRevenue / epc;
+  const adSpendNeeded = monthly >= 300? clicksNeeded * cpc : 0;
 
-  const { data, error } = await supabaseAdmin
-   .from('leads')
-   .insert({ name, email, phone, tool_id: tool?.id, type: type || 'ai', status: 'new' })
-   .select()
-   .single()
+  res.json({
+    current_mode: monthly < 300? 'ZERO CAPEX - Organic Only' : 'PAID SCALE MODE',
+    current_revenue: `$${monthly.toFixed(2)}`,
+    fixed_costs: `$${fixedCosts}`,
+    ad_spend_needed_for_20k: monthly < 300? '$0 until $300/mo' : `$${adSpendNeeded.toFixed(0)}`,
+    total_costs_at_20k: `$${(fixedCosts + adSpendNeeded).toFixed(0)}`,
+    net_profit_at_20k: `$${(targetRevenue - fixedCosts - adSpendNeeded).toFixed(0)}`,
+    roas_needed: monthly < 300? 'N/A - Organic' : `${(targetRevenue/(fixedCosts + adSpendNeeded)).toFixed(2)}x`
+  });
+});
 
-  if (error) return res.status(500).json({ error: error.message })
+app.get('/', (req, res) => res.sendFile('public/index.html', { root: '.' }));
 
-  if (tool?.id) {
-    await supabaseAdmin.rpc('increment_conversions', { tool_id: tool.id }).catch(() => {})
-  }
-
-  res.json({ success: true, lead_id: data.id })
-})
-
-// Admin dashboard data - removed limit so you see all 31 posts
-app.get('/admin/dashboard', requireAdminKey, async (req, res) => {
-  try {
-    const [postsRes, leadsRes, clicksRes] = await Promise.all([
-      supabaseAdmin.from('posts').select('*, tools(*)').eq('status', 'published')
-       .order('published_at', { ascending: false }),
-      supabaseAdmin.from('leads').select('*').order('created_at', { ascending: false }).limit(10),
-      supabaseAdmin.from('clicks').select('*').order('created_at', { ascending: false }).limit(20)
-    ])
-
-    res.json({
-      live_posts: postsRes.data || [],
-      recent_leads: leadsRes.data || [],
-      recent_clicks: clicksRes.data || []
-    })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-// Lead counts for revenue calc
-app.get('/api/leads/count', requireAdminKey, async (req, res) => {
-  const [{ count: total_leads }, { count: contractor_leads }, { count: ai_leads }] = await Promise.all([
-    supabaseAdmin.from('leads').select('*', { count: 'exact', head: true }),
-    supabaseAdmin.from('leads').select('*', { count: 'exact', head: true }).eq('type', 'contractor'),
-    supabaseAdmin.from('leads').select('*', { count: 'exact', head: true }).eq('type', 'ai')
-  ])
-
-  const estimated_revenue = (contractor_leads * 150) + (ai_leads * 5)
-  res.json({ total_leads: total_leads || 0, contractor_leads: contractor_leads || 0, ai_leads: ai_leads || 0, estimated_revenue })
-})
-
-// Edit post
-app.post('/admin/edit/:id', requireAdminKey, async (req, res) => {
-  const { id } = req.params
-  const { title, meta } = req.body
-  const { error } = await supabaseAdmin
-   .from('posts')
-   .update({ title, meta_description: meta, updated_at: new Date() })
-   .eq('id', id)
-
-  if (error) return res.status(500).json({ error: error.message })
-  res.json({ success: true })
-})
-
-// Unpublish post
-app.post('/admin/unpublish/:id', requireAdminKey, async (req, res) => {
-  const { id } = req.params
-  const { error } = await supabaseAdmin
-   .from('posts')
-   .update({ status: 'draft' })
-   .eq('id', id)
-
-  if (error) return res.status(500).json({ error: error.message })
-  res.json({ success: true })
-})
-
-// BRAIN: Hourly auto-publish cycle
-app.get('/internal/run-cycle', requireCronKey, async (req, res) => {
-  try {
-    const { data: tools, error: toolsError } = await supabaseAdmin
-     .from('tools')
-     .select('*')
-     .eq('status', 'active')
-     .is('last_posted_at', null)
-     .order('clicks', { ascending: false })
-     .limit(1)
-
-    if (toolsError) return res.status(500).json({ error: toolsError.message })
-    if (!tools?.length) return res.json({ success: false, message: 'No tools to process' })
-
-    const tool = tools[0]
-    const slug = `best-${tool.slug}-${Date.now()}`
-    const title = `Best ${tool.name} for Contractors in 2026 | Gridv21`
-    const meta_description = `${tool.name} review: Features, pricing, and why contractors use it.`
-    const body_md = `# ${tool.name} Review\n${tool.description || 'Top-rated tool for contractors.'}\n\n[Get ${tool.name} Here](/go/${tool.slug})`
-
-    const { data: post, error: postError } = await supabaseAdmin
-     .from('posts')
-     .insert({ tool_id: tool.id, slug, title, meta_description, body_md, status: 'published', published_at: new Date() })
-     .select()
-     .single()
-
-    if (postError) return res.status(500).json({ error: postError.message })
-
-    await supabaseAdmin.from('tools').update({ last_posted_at: new Date() }).eq('id', tool.id)
-    res.json({ success: true, posts_created: 1, tool_used: tool.name, post_slug: post.slug })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-// BRAIN: Weekly self-optimize
-app.get('/internal/tune-brain', requireCronKey, async (req, res) => {
-  try {
-    const { data: tools } = await supabaseAdmin.from('tools').select('*')
-    for (const tool of tools || []) {
-      const score = (tool.clicks || 0) + (tool.conversions || 0) * 3
-      const status = score > 15? 'boost' : score < 3? 'pause' : 'active'
-      await supabaseAdmin.from('tools').update({ performance_status: status }).eq('id', tool.id)
-    }
-    res.json({ success: true, tuned: tools?.length || 0 })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-// ===== AFFILIATE HQ ROUTES =====
-app.get('/api/tools', async (req, res) => {
-  const { data, error } = await supabaseAdmin
-   .from('tools')
-   .select('name, affiliate_link')
-  if (error) return res.status(500).json({ error: error.message })
-  res.json(data || [])
-})
-
-app.post('/api/affiliates/update-link', async (req, res) => {
-  const { tool_name, affiliate_link } = req.body
-  const { error } = await supabaseAdmin
-   .from('tools')
-   .update({ affiliate_link })
-   .eq('name', tool_name)
-
-  if (error) return res.status(500).json({ error: error.message })
-  res.json({ success: true })
-})
-
-// ===== LIVE ACTIVITY FEED VIA SSE =====
-app.get('/api/live-feed', requireAdminKey, async (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream')
-  res.setHeader('Cache-Control', 'no-cache')
-  res.setHeader('Connection', 'keep-alive')
-  res.flushHeaders?.()
-
-  const { data: recentLeads } = await supabaseAdmin
-   .from('leads')
-   .select('id, name, email, type, created_at')
-   .order('created_at', { ascending: false })
-   .limit(10)
-
-  res.write(`data: ${JSON.stringify({ type: 'init', data: recentLeads })}\n\n`)
-
-  const channel = supabaseAdmin
-   .channel('activity-feed')
-   .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'leads' },
-      payload => res.write(`data: ${JSON.stringify({ type: 'lead', data: payload.new })}\n\n`)
-    )
-   .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'clicks' },
-      payload => res.write(`data: ${JSON.stringify({ type: 'click', data: payload.new })}\n\n`)
-    )
-   .subscribe()
-
-  req.on('close', () => {
-    supabaseAdmin.removeChannel(channel)
-    res.end()
-  })
-})
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`)
-})
+// FIXED FOR RENDER: Use process.env.PORT
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log('GridV21 Brain v3.0.1 Zero CapEx running on port', PORT));

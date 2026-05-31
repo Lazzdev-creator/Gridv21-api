@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GridV21 Brain - Zero CapEx</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a0a0a;color:#fff;margin:0;padding:20px}
+.container{max-width:600px;margin:0 auto}
+.card{background:#1a1a1a;border:1px solid #333;border-radius:12px;padding:20px;margin-bottom:15px}
+h1{font-size:24px;margin-bottom:20px}
+h2{margin:0 0 15px;font-size:18px}
+.metric{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #222}
+.metric:last-child{border:none}
+.value{font-weight:600;color:#4ade80}
+.zero{background:#22c55e;padding:4px 8px;border-radius:6px;font-size:12px}
+.upgraded{background:#f59e0b;padding:4px 8px;border-radius:6px;font-size:12px}
+button{background:#4ade80;color:#000;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;margin-top:10px;width:100%;font-weight:600}
+input{width:100%;padding:8px;background:#0a0a0a;border:1px solid #333;border-radius:6px;color:#fff;margin:5px 0;box-sizing:border-box}
+hr{border:none;border-top:1px solid #333;margin:15px 0}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>GridV21 Brain v3.0</h1>
+  
+  <div class="card">
+    <h2>Mode <span id="mode-badge" class="zero">ZERO CAPEX</span></h2>
+    <div class="metric"><span>Status</span><span id="mode">Loading...</span></div>
+    <div class="metric"><span>Monthly Costs</span><span id="costs" class="value">$0</span></div>
+    <div class="metric"><span>Net Profit</span><span id="profit" class="value">$0</span></div>
+    <div class="metric"><span>Auto Upgrade</span><span id="upgrade-ready">Waiting for keys</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Revenue Forecast</h2>
+    <div class="metric"><span>Daily Revenue</span><span id="daily" class="value">$0.00</span></div>
+    <div class="metric"><span>Monthly Projection</span><span id="monthly" class="value">$0.00</span></div>
+    <div class="metric"><span>Days to $300 Render</span><span id="days-render">∞</span></div>
+    <div class="metric"><span>Days to $5k/mo</span><span id="days-5k">∞</span></div>
+    <div class="metric"><span>Days to $20k/mo</span><span id="days-20k">∞</span></div>
+  </div>
+
+  <div class="card">
+    <h2>14-Day Fast Forward <span class="upgraded">$87</span></h2>
+    <div class="metric"><span>Budget</span><span>$87</span></div>
+    <div class="metric"><span>Daily Target</span><span>$21.43</span></div>
+    <div class="metric"><span>Days Left</span><span id="ff-days">14</span></div>
+    <div class="metric"><span>Daily Needed</span><span id="ff-daily">$21.43</span></div>
+    <div class="metric"><span>Status</span><span id="ff-status">FAST FORWARD MODE</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Traffic Sources - Last 7 Days</h2>
+    <div id="traffic-sources"><div class="metric"><span>No data yet</span><span>Log revenue below</span></div></div>
+  </div>
+
+  <div class="card">
+    <h2>Log Revenue - $0 CapEx Entry</h2>
+    <input id="amount" type="number" step="0.01" placeholder="Amount $">
+    <input id="source" type="text" placeholder="Source: tiktok_organic, pinterest_organic, seo_organic">
+    <button onclick="logRevenue()">Log Revenue</button>
+  </div>
+</div>
+
+<script>
+async function loadData() {
+  const f = await fetch('/api/forecast').then(r=>r.json());
+  const t = await fetch('/api/traffic-forecast').then(r=>r.json());
+  const ff = await fetch('/api/fast-forward').then(r=>r.json());
+
+  document.getElementById('mode').textContent = f.mode.replace('_', ' ').toUpperCase();
+  document.getElementById('mode-badge').className = f.mode === 'zero_capex'? 'zero' : 'upgraded';
+  document.getElementById('mode-badge').textContent = f.mode === 'zero_capex'? 'ZERO CAPEX' : 'UPGRADED';
+  document.getElementById('costs').textContent = f.monthly_costs;
+  document.getElementById('profit').textContent = f.net_profit;
+  document.getElementById('upgrade-ready').textContent = f.auto_upgrade_ready? 'Ready' : 'Add RENDER_API_KEY';
+  
+  document.getElementById('daily').textContent = f.daily_revenue;
+  document.getElementById('monthly').textContent = f.monthly_projection;
+  document.getElementById('days-render').textContent = f.days_to_render;
+  document.getElementById('days-5k').textContent = t.days_to_5k;
+  document.getElementById('days-20k').textContent = t.days_to_20k;
+
+  document.getElementById('ff-days').textContent = ff.days_remaining;
+  document.getElementById('ff-daily').textContent = ff.daily_revenue_needed;
+  document.getElementById('ff-status').textContent = ff.status;
+
+  document.getElementById('traffic-sources').innerHTML = t.sources.length?
+    t.sources.map(s => `<div class="metric"><span>${s.source}</span><span>${s.revenue_7d} - ${s.pct}</span></div>`).join('') :
+    '<div class="metric"><span>No traffic yet</span><span>POST /webhook/tiktok</span></div>';
+}
+
+async function logRevenue() {
+  const amount = document.getElementById('amount').value;
+  const source = document.getElementById('source').value || 'manual';
+  if (!amount || amount <= 0) return alert('Enter amount');
+  await fetch('/api/revenue', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount:parseFloat(amount),source})});
+  document.getElementById('amount').value = '';
+  document.getElementById('source').value = '';
+  loadData();
+}
+
+loadData(); setInterval(loadData, 30000);
+</script>
+</body>
+      </html>
